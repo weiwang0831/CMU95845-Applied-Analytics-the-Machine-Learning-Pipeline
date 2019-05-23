@@ -1,0 +1,97 @@
+---
+title: "Applied analytics: machine learning pipeline - homework 2"
+output:
+  html_document:
+  fig_width: 7
+fig_height: 5
+---
+
+## Overview
+Homework 2 takes the skills learned in class into analysis in R. In part 1 you will conduct a secondary analysis of a randomized controlled trial on stroke. In part 2 you will model a noisy signal of glucose measurements for a patient in the ICU.
+
+**Homework 2 is due Wednesday 3/20 at 10:30am on Canvas.** Please submit two files: (1) an Rmd file, and (2) a pdf or html printout.  We will grade from your pdf and reference your code only where necessary.  Please remember to put your name and andrew ID on both.
+
+## Objectives
+- assess the outcomes of a randomized clinical trial
+- choose among missing data strategies: {MCAR, MAR, MNAR}, choosing indicator variables, and/or imputation
+- run machine learning algorithms: LR, ensembles
+- use basis functions to model single dimensional responses
+- incorporate regularization to enable use of more expressive bases
+
+Name: ____  
+andrew ID: ____
+
+## Part 1: Randomized trial for strokes (12 points)
+### Data set
+We discussed the value of randomized controlled trials in class, and in this homework we will look at data from one such trial: the International Stroke Trial. This was a study comparing the effectiveness of medications in a populaton of patients who had suffered strokes. The publication was in the leading British medical journal Lancet:
+http://www.sciencedirect.com/science/article/pii/S0140673697040117 (you may need to be on campus or use VPN)
+
+The data set is here:
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_corrected.csv
+(more information here: http://datashare.is.ed.ac.uk/handle/10283/128)
+
+The variable definitions files are also helpful:
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_variables.pdf
+http://datashare.is.ed.ac.uk/bitstream/handle/10283/128/IST_variables.csv
+
+
+### Preliminaries
+1a.
+
+- **Y:** What was the definition of the primary outcome in this study?
+- What is (are) the variable name(s) for the outcome?
+
+- **U:** what is (are) the variable name(s) for the intervention, and what is (are) their possible values?
+
+- **V, W:** describe the covariates included and the population being studied. Be specific where possible.
+
+[responses required]
+
+1b. Provide descriptive statistics for in groups of {aspirin, no aspirin} use, including information on age, gender, systolic blood pressure, and conscious state. In clinical literature, this information is often referred to as "Table 1".
+
+[response required]
+
+### Machine learning analysis
+Note: for this analysis, use a simple 50-50 train-test split.  If you have hyperparameter you want to use (not required), split your training set into a training and tune set, or use cross-validation. Keep your test set unused until you test at the end.
+
+1c. Let our outcome of interest be "dead or dependent at 6 months", i.e. so that we have a binary classification problem. What percent of patients are dead or dependent at 6 months in your train set and test set?
+[response required]
+
+1d. Choose which variables to include in your model. For example, remove variables for outcomes at 14 days (because if you are dead at 14 days you are certainly dead at 6 months). Moreover, you should remove all features measured after baseline, i.e. afer time 0 of the study, if you want to make a prediction based on baseline data. Similarly, specific indicators of the outcome should also be removed, since those are measurements past the baseline that are not our outcome of interest. For these reasons, you will need to remove groups of variables. Justify your approach.
+[response required]
+
+1e. Of the remaining variables, decide whether to exclude variables with missing data, impute them, and/or use indicator variables. (Note that if you choose multiple imputation for some variables, you would need to pool the results when evaluating performance, however for homework you may just use the first imputed data set because multiple imputation can be quite slow).  Justify your approach.
+[response required]
+
+Use the following machine learning algorithms: logistic regression, random forests, boosting, and gradient boosting (specify any parameters you set that are not the default).
+
+1f. Construct an ROC (receiver operating characteristic) curve for each model and overlay them on a graph. Include a legend that includes the method and the area under the ROC curve (AUC). You may use the packages "ROCR" or "pROC".
+[response required]
+
+1g. Report the variable importance of the features in randomForest and state type of importance you used.  What are critical factors in your prediction?
+[response required]
+
+
+## Part 2. Basis functions and regularization for daily glucoses [8 points]
+Blood glucose is a measurement that fluctuates throughout the day, with typical rises after meals. In this exercise we will model daily fluctuations in glucose in a single patient: 13033.
+
+Use the basis function plus regularization code provided in class to model the glucose (blood sugar) data from subject_id 13033. You will need to use the labevents.csv and d_labitems.csv found on Canvas for this exercise.
+
+2a. Extract the glucose data as measured through blood chemistry for the patient with subject_id 13033. Using a scatterplot, plot the values of glucose over time.  In a sentence, compare the mean and range of the glucose values with normal glucose values.
+[**response required**]
+
+2b. Split the data into training set and test set, where the test set is all data after year 3417.5 and the training set is everything else. Use the 1-d sine and cosine basis function from class (and on Canvas) to model **daily** fluctuations in glucose.  What period for the basis functions are you using (include units)? [**response required**]
+
+2c. Use cv.glmnet to learn a daily trend for the individual on the training set. Plot the coefficient profile with lambda on the x-axis. Report the lambda that performed best in CV (use lambda.min for this exercise).
+[**response required**]
+
+2d. Collapse all the test set day glucoses onto one day, i.e. keep only the time between 00:00 and 23:59.  On the same graph, plot the daily trend over (your prediction) as a line, and plot the true values as a scatterplot.
+[**response required**]
+
+2e. Calculate the sum of squares ($\sum_{i=1}^N (y_i-\bar{y})^2$) with $\bar{y}$ the average glucose value from the training set, as well as the residual sum of squares ($\sum_{i=1}^N (y_i-\hat{y_i})^2$) with $\hat{y_i}$ the ith prediction in the test set. What percent of the variation is explained by your model compared to using the training set mean?
+[**responses required**]
+
+2f. Make a statement about the daily variation of glucose in this individual. In particular, according to your model, when is it lowest? When is it highest?
+[**responses required**]
+
+Congratulations, you can now analyze RCT data, compare machine learning algorithms for mortality prediction, and model periodic trends hiding within noise.
