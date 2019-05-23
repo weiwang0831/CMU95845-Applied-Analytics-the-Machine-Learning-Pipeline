@@ -1,0 +1,373 @@
+---
+title: "hw1"
+author: "ww5_weiwang"
+date: "February 11, 2019"
+output: html_document
+---
+
+```{r}
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("tidyr","magrittr","purrr","dplyr","stringr","readr","data.table", "lubridate","crossval","eeptools","rpart","rpart.plot","caret","plotROC","pROC","ROCR")
+loadlibs(libs)
+```
+
+## (1) Your own decision tree [6]
+Preperation of the data
+```{r}
+#--- synthetic depression data
+depressionData = data.frame(
+  # do not modify the data in "depressionData"
+  pregnant = c(1,0,1,1),
+  depressed = c("yes","yes","no","no") %>% as.factor(),
+  age = c(18, 40, 35, 21),
+  hospitalized = c(1, 0, 0, 0) %>% as.logical()
+) %>% tbl_df()
+```
+
+a. debug the function, get odds value
+```{r}
+#--- tree: a model that outputs the odds of hospitalization from inputs of data (datums)
+tree = data.frame( # do not change "tree"
+  splitVariable = c("depressed", "pregnant", NA, NA, NA),
+  split = c("yes", 1, NA, NA, NA),
+  trueChild = c(2, 4, NA, NA, NA),
+  falseChild = c(3, 5, NA, NA, NA),
+  odds = c(NA, NA, 0.1, 2, 3)
+)
+
+predictOddsOnDataSet = function(tree, data, active = 1) {
+  apply(data, 1, (function(x) {predictedOdds(tree=tree, x, active=1)})  )
+}
+
+predictedOdds = function(tree, datum, active = 1) {
+  
+  if(is.na(tree[active,"splitVariable"])) {
+    # leaf of tree, so output value
+    return(tree$odds[active])
+    
+  } else {
+    # internal node of tree, so continue down tree to true/false child
+    if( (datum[[tree[active,"splitVariable"] %>% as.character]] %>% as.character) == tree[active,"split"])
+      return(predictedOdds(tree, datum, active = tree[active,"trueChild"]))
+    
+    else
+      return(predictedOdds(tree, datum, active = tree[active,"falseChild"]))
+    
+  }
+  
+}
+
+predictOddsOnDataSet(tree, depressionData) 
+```
+
+b. Add two columns, `odds` and `probability` to `depressionData` that give you the predicted odds and probabilities of hospitalization. Print the result.
+```{r}
+depressionData$odds=predictOddsOnDataSet(tree,depressionData)
+depressionData$probability=depressionData$odds/(depressionData$odds+1)
+depressionData
+```
+
+c. Using a threshold probability of 0.5, what is:
+  acc = (TP+TN)/(FP+TN+TP+FN); sens = TP/(TP+FN); spec = TN/(FP+TN)
+  ppv = TP/(FP+TP); npv = TN/(TN+FN)
+
+```{r}
+predict1 = function(prob){
+  result=rep(NA, length(prob))
+  for (i in 1:length(prob)) {
+    print(prob[i])
+    if(prob[i]>=0.5){
+      result[i]=TRUE
+    }else{
+      result[i]=FALSE
+    }
+  }
+  return(result)
+}
+#actual value
+actual=depressionData$hospitalized
+#predict value
+predict_h=predict1(depressionData$probability)
+cm=confusionMatrix(table(predict_h,actual),negative=FALSE)
+cm
+```
+- the accuracy of the model?
+  0.75
+- the sensitivity of the model?
+  0.5
+- the specificity of the model?
+  1.0
+- the precision of the model?
+  1.0
+- the recall of the model?
+  0.5
+
+d. Write a function modifyTree() that takes a tree and an indicated leaf node (by row number) and returns a tree with a new split on "age < 21" with two new leaf nodes giving the odds specified in the call, i.e.  `modifyTree(tree, row, split_string, trueChildOdds, falseChildOdds)` where split_string equals "age < 21". Print the new tree when `modifyTree(tree, 3, "age < 21", 0.1, 1)` is called.
+```{r}
+modifyTree = function(tree, row, split_string, trueChildOdds, falseChildOdds){
+  split_name=substr(split_string,1,3)
+  split_num=substr(split_string,7,nchar(split_string))
+  
+  tree$splitVariable=as.character(tree$splitVariabl)
+  tree$split=as.character(tree$split)
+  tree$splitVariable[row]=as.character(split_name)
+  tree$split[row]=as.numeric(split_num)
+  tree$odds[row]=NA
+  tree$trueChild[row]=length(tree)+1
+  tree$falseChild[row]=length(tree)+2
+  
+  tree = rbind(tree,c(NA,NA,NA,NA,trueChildOdds))
+  tree = rbind(tree,c(NA,NA,NA,NA,falseChildOdds))
+  return(tree)
+}
+tree=modifyTree(tree, 3, "age < 21", 0.1, 1)
+tree
+```
+
+
+
+## (2) Applying logistic regression for association and prediction [14]
+#### Subsection 1. [6]
+a. State and justify your chosen unit of analysis (e.g. person, hospitalization), and then preprocess the data accordingly. Report descriptive statistics by summarizing each of the features above and the outcome.
+
+For most of the columns, the result is good distributed without much outliers, while when I plot for icustay total numer, it shows that most of the num are aggregate at 1, also for barplot, there are several category very concentrate. The age of death shows a left skew, which indicates most of the patients are elders.
+```{r}
+###preprocessing the data
+icustay=read.csv("icustay_detail.csv",header = TRUE)
+demo=read.csv("demographic_detail.csv",header = TRUE)
+icd=read.csv("icd9.csv",header = TRUE)
+
+icustay=icustay[c("icustay_id","subject_id","icustay_admit_age","gender","hadm_id","icustay_total_num","hospital_expire_flg","dob","dod")]
+demo=demo[c("subject_id","ethnicity_descr","overall_payor_group_descr","admission_type_descr","admission_source_descr")]
+
+new_table=icustay %>% left_join(demo, by="subject_id")
+
+icd = icd %>%
+  group_by(subject_id,hadm_id) %>%
+  summarise(ttlCode=length(code)) %>%
+  arrange(subject_id,hadm_id) %>% as.data.frame()
+new_table = left_join(new_table,icd,by=c("subject_id","hadm_id"))
+new_table = new_table %>% 
+  group_by(subject_id) %>%
+  mutate(number_hadm = seq(1,length(hadm_id)),
+         number_code = cumsum(ttlCode)) %>% as.data.frame()
+
+newdata=unique(new_table)
+newdata$age_death=age_calc(as.Date(newdata$dob),as.Date(newdata$dod),units = "years",precise = FALSE)
+summary(newdata)
+hist(newdata$age_death)
+hist(newdata$icustay_total_num)
+barplot(table(newdata$admission_source_descr),las=2)
+
+#seperate train and test data
+newdata = newdata[sample(1:nrow(newdata)),]
+lr_train = newdata[1:8000,]
+lr_train=na.omit(lr_train)
+lr_test = newdata[-(1:8000),]
+lr_test = na.omit(lr_test)
+
+```
+b. Use and interpret logistic regression using only the features: (1) age at ICU admission, (2) gender, and (3) type of admission. In a sentence, make a precise, interpretive statement about the relationship of age and in-hospital death for this model.
+
+From the summary of the model, we found that the age has a statistically significant value with the expire_flag, which is around 0.01. For coefficient, For every unit change in admit_age, the log odds of being expire will increase by 0.0057. This shows a positive relationship. This means as the age increase, the probability of hospital death will increase with more that 99% confident. If we keep other variables constant, the age use associated with 0.57% increase in odds of death.
+
+```{r}
+#conduct logistic model
+mylogit <- glm(hospital_expire_flg~icustay_admit_age+gender+admission_type_descr+ttlCode,data = lr_train, family = binomial("logit"))
+mylogit %>% summary()
+```
+
+c. State a use case for using the logistic regression model or the results from the model (one sentence). A well-described use case includes a description of intended users, temporal/situational/contextual constraints, and how the model or results may provide value.  Given this use case, state which of the above features you should and should not use (one sentence).  Briefly explain why (one sentence). Re-run logistic regression (and preprocessing as necessary) based on the features that support your use case and report the summary.
+
+Suppose I have a use case, this patient is old, 80 years old, the patient is admited through Emergency, gender is female, her payment is by medicare. In this case, I think she has a large probability dead in hospital.
+In this case, I think age, gender, admit_type, payment_way,admission_source_descr should be included. While death_age, icustay_total_num, ethnicity is not neccessarily to be included. In order to prove that, we build a model with these variables included, and see their statistical performance.
+payment_way can affect a lot since self payment always cannot afford expensive fees, also if the patient is being introducsed by emergency and urgent
+```{r}
+mylogit2 <- glm(hospital_expire_flg~icustay_admit_age+gender+admission_type_descr+overall_payor_group_descr+ttlCode,data = lr_train, family = binomial("logit"))
+mylogit2 %>% summary()
+```
+
+#### Subsection 2. [5]
+d. Fit a decision tree and plot the tree.
+```{r}
+#decision_tree
+tc <- rpart.control(minsplit = 20, minbucket = 10, maxdepth = 5, xval = 5, cp = 0.005)
+tree_result=rpart(hospital_expire_flg ~ icustay_admit_age+gender+admission_type_descr+overall_payor_group_descr+ttlCode, data = newdata, control = tc)
+prp(tree_result,extra = 1)
+rpart.plot(tree_result,cex = 0.9)
+```
+
+e. Conduct 5-fold cross-validation for logistic regression and decision tree. Plot ROCs and report AUCs. In a sentence, make a comparison between logistic regression and decision tree performances.
+
+```{r}
+#logistic regression
+##cross validation, k=5
+ctrl = trainControl(method = 'cv',number = 5)
+newdata=na.omit(newdata)
+mylogit3 = train(hospital_expire_flg~icustay_admit_age+gender+admission_type_descr+overall_payor_group_descr+ttlCode,
+                 data=newdata,method='glm',family="binomial",trControl=ctrl)
+lr_prediction=data.frame(preds=(mylogit3 %>% predict(newdata, type="raw")))
+lr_prediction$preds2=!as.numeric(lr_prediction$preds)==1
+lr_prediction=data.frame(lr_prediction$preds2)
+#ROC Curve
+columns_for_ROC =  # columns: predictions, labels
+  newdata %>%
+  select(hospital_expire_flg) %>%
+  bind_cols(lr_prediction) %>% mutate(type=hospital_expire_flg=="Y")
+# plot it:
+prediction(predictions=as.numeric(columns_for_ROC$lr_prediction.preds2),
+           labels=columns_for_ROC$type) %>%
+  performance("tpr", "fpr") %>% plot()
+
+lr_pred = ROCR::prediction(as.numeric(columns_for_ROC$lr_prediction.preds2),columns_for_ROC$type)
+lr_auc = mean(ROCR::performance(lr_pred,"auc")@y.values %>% unlist())
+lr_auc
+```
+
+```{r}
+####decision tree
+fit <- train(hospital_expire_flg ~ icustay_admit_age+gender+admission_type_descr+overall_payor_group_descr+ttlCode, data = newdata , method = "ctree",
+             trControl = trainControl(method = "cv", number = 5),
+             tuneLength=5) 
+fit    
+fit$finalModel
+tree_prediction <- predict(fit, newdata = newdata,type='raw') # prediction probabilities
+tree_prediction=data.frame(preds=(fit %>% predict(newdata, type="raw")))
+tree_prediction$preds2=!as.numeric(tree_prediction$preds)==1
+tree_prediction=data.frame(tree_prediction$preds2)
+#ROC Curve
+columns_for_ROC =  # columns: predictions, labels
+  newdata %>%
+  select(hospital_expire_flg) %>%
+  bind_cols(tree_prediction) %>% mutate(type=hospital_expire_flg=="Y")
+
+# plot it:
+prediction(predictions=as.numeric(columns_for_ROC$tree_prediction.preds2),
+           labels=columns_for_ROC$type) %>%
+  performance("tpr", "fpr") %>% plot()
+
+tree_pred = ROCR::prediction(as.numeric(columns_for_ROC$tree_prediction.preds2),columns_for_ROC$type)
+tree_auc = mean(ROCR::performance(tree_pred,"auc")@y.values %>% unlist())
+tree_auc
+```
+
+f. Draw learning curves (y: performance measure, x: number of training samples) for logistic regression and decision tree. Does one algorithm dominate the other? If not, when does logistic regression have better performance?
+
+Two algorithm does not dominate the other. When sample size are larger than 7000, it is better in performce.
+
+```{r}
+###learning curve
+
+lrn_crv=data.table(size=numeric(),accuracy=double(),desc=character())
+
+for (i in seq(3000,nrow(newdata),300)) {
+  #have a new sample set
+  newdata = newdata[sample(1:nrow(newdata)),]
+  lr_train = newdata[1:i,]
+  lr_train=na.omit(lr_train)
+  lr_test = newdata[-(1:i),]
+  lr_test = na.omit(lr_test)
+  #conduct model
+  mlr <- glm(hospital_expire_flg ~ icustay_admit_age+gender+admission_type_descr+overall_payor_group_descr+ttlCode, family = binomial("logit"), data = lr_train)
+  mtree <- rpart(hospital_expire_flg ~ icustay_admit_age+gender+admission_type_descr+overall_payor_group_descr+ttlCode, data = lr_train, method = 'class')
+  
+  model_prob <- predict(mlr, lr_test, type = "response")
+  lr_test <- lr_test  %>% mutate(model_pred = 1*(model_prob > .5) + 0,
+                           hospital_expire_flg = 1*(hospital_expire_flg == "Y") + 0)
+  lr_test <- lr_test %>% mutate(accurate = 1*(model_pred == hospital_expire_flg))
+  acc=sum(lr_test$accurate)/nrow(lr_test)
+  
+  PreditionsWithClass <- predict(mtree, lr_test, type = "class")
+  t <- table(predictions = PreditionsWithClass, actual = lr_test$hospital_expire_flg)
+  tree_acc<-sum(diag(t))/sum(t)
+  
+  
+  #append result into lrn_crv table
+  tmp=data.table(size=i,accuracy=acc,desc="logit")
+  tmp2=data.table(size=i,accuracy=tree_acc,desc="tree")
+  lrn_crv=rbind(lrn_crv,tmp)
+  lrn_crv=rbind(lrn_crv, tmp2)
+}
+
+summary(lrn_crv)
+
+p<-ggplot(lrn_crv, aes(x=size, y=accuracy, group=desc)) +
+  #geom_line(aes(color=desc))+
+  geom_point(aes(color=desc))+
+  geom_smooth(span = 0.2,aes(color=desc))
+p
+```
+
+#### Subsection 3. [3]
+g. Estimate the odds and probability of in-hospital death for a patient with following features using the trained LR model from part (b). Note some of the features below may be unused.
+
+The logistic model in part b is mylogit. The probability of in-hospital death for this patient is 0.559, the odds is 1.27
+
+```{r}
+case = data.frame(icustay_admit_age=58, gender='M', admission_type_descr='URGENT', ttlCode=11)
+logit=predict(mylogit, case, type="response")
+odds <- exp(logit)
+prob <- odds / (1 + odds)
+print(c(prob,odds))
+
+```
+
+h. Divide the LR model coefficients (from (b)) by the coefficient with the smallest absolute value (call this m), and round the adjusted coefficients to have 2 significant digits, e.g. 4871 becomes 4900. Call these points. 1/m is the number of points to increase the log odds by 1.  
+Using the more human interpretable (but mathematically suboptimal) points system from the sentence above, **plot a graph with y-axis the probability of in-hospital death, and x-axis number of points** . Then, **calculate and report the probability of in-hospital death for an individual with the following features**:
+
+```{r}
+coef=mylogit$coefficients
+m=min(abs(mylogit$coefficients))
+points=signif(coef/m,digits = 2)
+coef=points
+points
+1/m
+
+for(i in 1:length(coef)){
+  if(coef[i]>100){
+    coef[i]=signif(coef[i],digits = 2)
+  }else{
+    coef[i]=round(coef[i],0)
+  }
+}
+coef
+
+#points for this patient
+points.patient = 76.5 * coef[1] + 1*coef[4] + 14*coef[7]
+odds = exp(points.patient*m)
+new.prob = odds/(1+odds)
+new.prob
+
+#construct points system
+#calculate points based on previous adjusts coefficient
+points=list()
+for (i in 1:length(newdata)) {
+  gender_score=as.numeric(newdata$gender=='M')
+  type_scr_e=as.numeric(newdata$admission_type_descr=='EMERGENCY')
+  type_scr_n=as.numeric(newdata$admission_type_descr=='NEWBORN')
+  type_scr_u=as.numeric(newdata$admission_type_descr=='URGENT')
+  tmppoints=coef[2]*newdata$icustay_admit_age+coef[3]*gender_score+coef[4]*type_scr_e+coef[5]*type_scr_n+coef[6]*type_scr_u+coef[7]*newdata$ttlCode
+  points[[i]]=tmppoints
+}
+points=data.frame(points)[1]
+setnames(points, c("points") )
+
+prob = list()
+for(i in 1:length(points)){
+  p = points[i]*m
+  odds = exp(p)
+  prob[[i]] = odds/(1+odds)
+}
+
+score = data.frame(cbind(prob,points))
+setnames(score,c("prob","points"))
+
+plot(score$points,score$prob)
+```
+
