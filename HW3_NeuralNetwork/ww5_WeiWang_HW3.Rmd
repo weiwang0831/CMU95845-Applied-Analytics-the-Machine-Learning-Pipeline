@@ -1,0 +1,359 @@
+---
+title: "ww5_HW3_complete"
+author: "Wei_Wang"
+date: "April 3, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#set environment
+loadlibs = function(libs) {
+  for(lib in libs) {
+    class(lib)
+    if(!do.call(require,as.list(lib))) {install.packages(lib)}
+    do.call(require,as.list(lib))
+  }
+}
+libs = c("dplyr","tidyr")
+loadlibs(libs)
+```
+
+```{r}
+drgs=read.csv("drgevents.csv",header = TRUE)
+procedure=read.csv("procedureevents.csv",header = TRUE)
+codeitem=read.csv("d_codeditems.csv",header = TRUE)
+lab=read.csv("labevents.csv",header = TRUE)
+labitem=read.csv("d_labitems.csv",header = TRUE)
+```
+
+
+### Objectives
+- construct a data set from multiple tables for predictive analysis
+- develop and adapt code to train and predict from neural networks
+- fine-tune an image network for cell type determination
+
+### Part 1: DRG prediction (10 points)
+1a. In a sentence, how might a prediction for DRG cost weight be useful for billing coders? (1)
+- Based on the prediction of DRG cost weight, the billing coders can assign the encounter to a more accurate cost weight, instead of just relying on domain knowledge of ICD 9, or MCC/CC
+
+#### Preprocessing
+1b. For each of the following tables: *DRGs* and *procedures*, construct a table to identify the most common events, retaining the hadm_id (you will use it in part 1d). Report the 10 events with the highest total counts.  Display them in tables with two columns: the English description of the event and the count.  Note to get the English description you will need to join the tables with description tables e.g. d_codeditems. (2)
+
+```{r}
+drg_count=left_join(drgs,codeitem,by=c("itemid"))
+procedure_count=left_join(procedure,codeitem,by=c("itemid"))
+
+##1b
+drg_event=drg_count %>%
+  group_by(itemid,description) %>%
+  summarise(ttlCount=length(itemid)) %>%
+  arrange(itemid,description) %>% as.data.frame()
+  
+drg_event2=drg_event[,c(2,3)] %>% 
+  #filter(rank(desc(ttlCount))<=10) %>%
+  arrange(description,ttlCount)
+
+prc_event=procedure_count %>%
+  group_by(itemid,description) %>%
+  summarise(ttlCount=length(itemid)) %>%
+  arrange(itemid,description) %>% as.data.frame()
+
+prc_event2=prc_event[,c(2,3)] %>% 
+  #filter(rank(desc(ttlCount))<=10) %>%
+  arrange(description,ttlCount)
+
+drg_event2%>%filter(rank(desc(ttlCount))<=10)
+prc_event2%>%filter(rank(desc(ttlCount))<=10)
+```
+
+1c. Use the *lab events table* to create counts of lab events for every hadm_id. In a more detailed analysis, we would consider the value with respect to the lab's normal range, however, for this exercise, simply provide counts of normal and abnormal events for all lab events (given by "flag"). Let's call a lab with normal/abnormal flags a lab tuple, e.g. the tuple (event, flag) = "(hemoglobin, abnormal)". You may treat other values such as NA as their own category.  Display the 10 lab tuples with the highest number of occurrences (use labevents and d_labitems). (1)
+```{r}
+lab_event=lab[,c(2,4,8)]
+lab_event=left_join(lab_event,labitem,by=c("itemid"))
+lab_event$flag2[lab_event$flag=="abnormal"]<-"abnormal"
+#lab_event$flag2[lab_event$flag=="normal"]<-"normal"
+lab_event$flag2[is.na(lab_event$flag)]<-"normal"
+
+#replace na in description
+levels=levels(lab_event$loinc_description)
+levels[length(levels) + 1] <- "None"
+lab_event$loinc_description=factor(lab_event$loinc_description,levels = levels)
+lab_event$loinc_description[is.na(lab_event$loinc_description)]<-"None"
+
+#lab_event2=lab_event[which(c(lab_event$flag2!="other")),]
+lab_event=lab_event[!is.na(lab_event$hadm_id),]
+lab_event$tuple=paste(lab_event$itemid,lab_event$flag2,sep="_")
+lab_event$tuple_desc=paste(lab_event$loinc_description,lab_event$flag2,sep="_")
+
+
+lab_count=lab_event %>%
+  group_by(tuple,tuple_desc) %>%
+  summarise(ttlCount=length(tuple)) %>%
+  arrange(tuple_desc,ttlCount) %>% as.data.frame()
+
+lab_count%>%filter(rank(desc(ttlCount))<=10)
+```
+
+1d. Filter your results in 1b and 1c to keep (up to) the 2000 most common events from the each table (3 of them).  Create a single table containing counts of feature events (procedures and labs) for each hadm_id. In long format this involves making every table have the same columns, e.g. hadmid, event, count, and then using bind_rows(.).  In wide format, this involves joining the tables by hadm_id (you may use inner join if some hospital admissions are not present in each table).  Convert your table to wide format, e.g. ```data %>% spread(event, count, fill=0)```.  
+Next, join it with your outcomes of interest: the cost weight, making sure that your features do not include other information from the DRG table. Because the counts may vary considerably in magnitude, transform the counts by the function f(x) = log(1+x).  Create a train and test set with a 50%/50% split. Report the dimensions of your train set. (2)
+
+```{r}
+drg_filter=drg_event%>%filter(rank(desc(ttlCount))<=2000)
+prc_filter=prc_event%>%filter(rank(desc(ttlCount))<=2000)
+lab_filter=lab_count%>%filter(rank(desc(ttlCount))<=2000)
+
+drg1d=inner_join(drg_count[,c(2,3,9)],drg_filter,by=c("itemid"))[,c(1,2,5)]
+prc1d=inner_join(procedure_count[,c(2,3,10)],prc_filter,by=c("itemid"))[,c(1,2,5)]
+lab1d=inner_join(lab_event[,c(1,10,11)],lab_filter,by=c("tuple"))[,c(1,2,5)]
+names(lab1d) <- c("hadm_id", "itemid","ttlCount")
+drg1d$itemid=as.character(drg1d$itemid)
+prc1d$itemid=as.character(prc1d$itemid)
+
+#long format
+long_data=bind_rows(drg1d,prc1d,lab1d)
+long_data=unique(long_data)
+long_data$count=log10(1+long_data$ttlCount)
+long_data=long_data[,c(1,2,4)]
+wide_data=spread(long_data,itemid,count)
+wide_data=inner_join(wide_data,drgs[,c(2,4)],by=c("hadm_id"))
+wide_data[is.na(wide_data)]=0
+
+## 75% of the sample size
+smp_size <- floor(0.5 * nrow(wide_data))
+
+## set the seed to make your partition reproducible
+set.seed(123)
+train_ind <- sample(seq_len(nrow(wide_data)), size = smp_size)
+
+train <- wide_data[train_ind, ]
+test <- wide_data[-train_ind, ]
+xtrain=train%>% select(-cost_weight) %>% as.matrix()
+ytrain=train%>% select(cost_weight) %>% as.matrix()
+xtest=test%>% select(-cost_weight) %>% as.matrix()
+ytest=test%>% select(cost_weight) %>% as.matrix()
+dim(train)
+```
+
+
+#### Modeling
+1e. Create a model with 3 hidden layers of size 32 with your choice of activation functions. Display the model. State what output activation function and what loss function are appropriate for the task. Note that you should probably use regularization because we have more features than samples. (2)
+
+```{r}
+library(keras)
+model = keras_model_sequential() 
+model %>%
+  layer_dense(units = 32,
+              activation = 'relu',
+              input_shape = c(ncol(xtrain))) %>% 
+  #layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 32, activation = 'relu') %>%
+  layer_dense(units =32, activation = 'relu') %>%
+  layer_dense(units = 32, activation = 'linear',kernel_regularizer = regularizer_l2(l = 0.03)) %>%
+  layer_dense(units = 1, activation = 'linear')
+
+summary(model)
+
+model %>% compile(
+  # loss = 'categorical_crossentropy',
+  loss = c('mse'),
+  optimizer = optimizer_nadam(clipnorm = 10),
+  metrics = c('mse')
+)
+```
+
+
+1f. Train the model, report training and test set error and plot the cost weight predictions against the true cost weights. Make an interpretation statement about your findings. (2)
+
+```{r}
+#train model
+inner_epochs = 10
+early_stopping = callback_early_stopping(monitor = "val_loss",
+                                         patience = inner_epochs/2)
+bestLoss = 1e10
+for(i in 1:20) {
+  history = model %>% fit(xtrain, ytrain,
+                          epochs = inner_epochs,
+                          callbacks = c(early_stopping),
+                          batch_size = 100,
+                          validation_split = 0.2, shuffle=T
+  )
+  loss = history$metrics$val_loss[length(history$metrics$val_loss)]
+  if(loss < bestLoss) {
+    bestLoss = loss
+    model %>% save_model_weights_hdf5("my_model_weights.h5")
+  }
+  if(length(history$metrics$val_loss) < inner_epochs)
+    break
+}
+plot(history, metrics = "loss")
+
+### Load the early-stopping model
+bestModel = model %>% load_model_weights_hdf5('my_model_weights.h5')
+bestModel %>% compile(
+  # loss = 'categorical_crossentropy',
+  loss = 'mse',
+  optimizer = optimizer_nadam(),
+  metrics = c('mse')
+)
+
+### Make predictions
+bestModel %>% predict_on_batch(xtest) %>% head()
+summary(bestModel)
+
+plot(ytest,bestModel %>% predict_on_batch(xtest))
+bestModel %>% evaluate(xtrain, ytrain)
+bestModel %>% evaluate(xtest, ytest)
+```
+
+The training and testing errors are similary, which is shown above, the training error is slightly lower, but get closed, which indicate the model is not either overfitting of underfitting. The plot shows that the prediction is relatively okay, while some of the predictions are still not accurate, this can be caused by many 0s exist in the variable.
+
+
+### Part 2: classifying Pap smear slides as normal/cancerous (10 points)
+
+In this part we will compare predictive performance of a multilayer network with a fine-tuned image network.  Fine-tuning is a process of adapting a pre-trained network for your predictive task.  It can be helpful to use because the pre-trained network acts a feature detector, which provides a data representation potentially useful for related predictive tasks.  Here, we will use a network trained on images of objects (from ImageNet) and adapt it to classify images of normal and cancerous cells on pathology slides.
+
+We will use a subset of images pulled from http://orbit.dtu.dk/files/2528109/oersted-dtu2886.pdf. The subset includes only cells classified as normal or as carcinoma in situ (cancerous, not an intermediate stage).
+
+2a. Modify the code below (change the file directories) to load the data.  Plot 10 normal and 10 cancerous cells.  With your eyes, can you differentiate characteristics of the normal and cancerous cells? If so, by what characteristics? If not, describe what makes it difficult to identify patterns. (1 sentence) (2).
+
+```{r}
+library(keras)
+library(abind)
+# create the base pre-trained model
+base_model <- application_inception_v3(weights = 'imagenet', include_top = FALSE)
+
+# image data, from: http://orbit.dtu.dk/files/2528109/oersted-dtu2886.pdf
+image_normal_dir = "./normals/"
+image_cancer_dir = "./carcinoma_in_situ/"
+load_images = function(image_dir, dims=c(224,224,3), verbose=F) {
+  imgs = array(0, dim=c(length(list.files(image_dir)),dims))
+  fi=0
+  for (f in list.files(image_dir)) {
+    if(verbose && fi%%10 == 0) {
+      print(paste0(fi, "/", length(list.files(image_dir)))) }
+    fi = fi + 1
+    img <- image_load(paste0(image_dir,f), target_size = dims[1:2])
+    x <- image_to_array(img)
+    # ensure we have a 4d tensor with single element in the batch dimension,
+    # the preprocess the input for prediction using resnet50
+    x <- array_reshape(x, c(1, dim(x)))
+    x <- imagenet_preprocess_input(x, mode="tf")
+    imgs[fi,,,] = x
+  }
+  return(imgs)
+}
+normals = load_images(image_normal_dir, verbose=T)
+cancers = load_images(image_cancer_dir, verbose=T)
+alldata = abind(normals,cancers, along = 1)
+labels = 
+  data.frame(label=c(rep("normal", dim(normals)[1]),
+                     rep("cancer", dim(cancers)[1]))) %>%
+  as_tibble()
+rm(normals,cancers)
+
+# Create train test split
+set.seed(1e8)
+traini = sample.int(n=dim(alldata)[1], size=200)
+train_data = alldata[traini,,,]
+test_data = alldata[-traini,,,]
+train_labels = labels[traini,][[1]]
+test_labels = labels[-traini,][[1]]
+rm(alldata)
+
+# plot a few examples
+par(mfrow=c(5,4), oma = c(2, 2, 0.2, 0.2), mar=c(0,1,1,1))
+for(i in 1:20) {
+  ((train_data[i,,,] - min(train_data))/(max(train_data)-min(train_data))) %>% 
+    as.raster() %>% plot()
+}
+```
+
+I cannot distinguish normal and cancerous cells, they are under similary colors, and cells are presenting with different structures, while I have few domain knowledge here, therefore I cannot distinguish them
+
+2b. Train a multilayer network on the training set.  You may find the layer ```layer_flatten``` helpful to reshape the image into a vector, e.g. ```model %>% layer_flatten(input_shape=c(224,224,3)) %>% layer_dense(...) ```. You may want to iteratively refine the model by inspecting its performance on a validation set. Print the model summary and specify the optimizer, output activation function, and loss functions used (2).
+
+```{r}
+#2b train network layers
+# add our custom layers
+predictions = base_model$output %>% 
+  layer_global_average_pooling_2d() %>% 
+  #layer_flatten(input_shape=c(224,224,3)) %>%
+  layer_dense(units = 16, activation = 'relu') %>%
+  layer_dense(units = 64, activation = 'tanh') %>% 
+  layer_dense(units = 2, activation = 'softmax')  # there are 2 classes
+
+model = keras_model(inputs = base_model$input, outputs = predictions)
+freeze_weights(base_model)
+model %>% 
+  compile(optimizer = optimizer_adam(), loss = loss_categorical_crossentropy,
+                  metrics = "accuracy")
+
+# train the model on the new data for a few epochs
+test_labels=array(test_labels)
+train_labels=array(train_labels)
+train_labels[train_labels=="cancer"]=1
+train_labels[train_labels=="normal"]=0
+test_labels[test_labels=="cancer"]=1
+test_labels[test_labels=="normal"]=0
+history_part2=model %>% fit(x=train_data, y=train_labels, epochs=5, shuffle=T)
+plot(history_part2)
+
+#evaluate the original model
+eval_1=model %>% evaluate(x=test_data, y=test_labels)
+preds = model %>% predict(test_data, verbose=1)
+
+#print the summary of the model
+summary(model)
+```
+
+The optimizer is optimizer_adam(), loss is using loss_categorical_crossentropy, and the output acivation function is using sigmoid, since this is a binary class problem.
+
+2c. Adapt the fine-tuning code shown in class to fine-tune the ```base_model``` from part 2a. State the steps you performed to fine-tune the model. Train the fine-tuned model for several epochs. If you run into memory issues, you may use a smaller pre-trained model e.g. ```application_vgg16``` (or use the computer lab computers). Print the model summary and specify the optimizer used. (2)
+
+```{r}
+#2c train with fine-tuning
+freeze_weights(base_model, from = 1, to = 172)
+unfreeze_weights(base_model, from = 173)
+
+# We need to recompile the model for these modifications to take effect
+model_fine=model
+model_fine=model_fine%>% compile(
+  optimizer = optimizer_adam(lr = 0.0001), 
+  loss = loss_categorical_crossentropy,
+  metrics = "accuracy"
+)
+history_fine_tuning = model_fine %>% fit(x=train_data, y=train_labels, epochs=5, shuffle=T)
+summary(model_fine)
+```
+
+The optimizer: optimizer_adam(lr=0.0001)
+
+2d. Compare the test set performance of the models trained in 2b and 2c on a single plot using ROC curves and provide the AUC. (2)
+
+```{r}
+#2d-compare-ROC-AUC
+eval_2=model_fine%>% evaluate(x=test_data,y=test_labels)
+preds_fine = model_fine %>% predict(test_data, verbose=1)
+
+#first model
+eval_1
+#fine-tuning model
+eval_2
+
+library(pROC)
+par(mfrow=c(1,1))
+roc_rose <- plot(roc(test_labels,preds[,2]), print.auc = TRUE, col = "red")
+roc_rose <- plot(roc(test_labels,preds_fine[,2]), print.auc = TRUE, print.auc.y = .4,col = "blue",add=TRUE)
+roc_rose
+
+```
+
+2e. Likely your predictions are not perfect.  In 2 sentences, suggest 2 types of analysis/outputs you would show to a clinician expert to help determine how to improve the image prediction pipeline. (2)
+
+First suggestion is that showing the AUC and ROC curve, this can help to indicate tpr vs. fpr, shows that how good the prediction is on the true cancer. While this is not well indicate the percentage that how many images/cells are wrongly thought to be normal, but they are actually cancer. In the prediction pipeline, we might add one more metric such as confusion matrix to evaluate
+
+Second: Instead of using neural network directly, we can also use some other models such as logistic regression and check if the result is already make sense, if not, by comparing these models, we can figure out a better option.
